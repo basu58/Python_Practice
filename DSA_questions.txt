@@ -1,0 +1,3 @@
+Q1. Given a 2D grid of 0s and 1s, count the number of islands.
+Q2. Given an array of integers and a target sum N, return true if there exists a subset whose sum equals N, otherwise return false.
+Q1. Given a binary tree root and an array of levels, return the nodes present at those specific levels.
