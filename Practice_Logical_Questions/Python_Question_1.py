@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # DBTITLE 1,Question 1: Happy Customers
 # MAGIC %md
 # MAGIC # Question 1: Happy Customers
@@ -40,6 +44,32 @@
 # MAGIC ## Your Task
 # MAGIC
 # MAGIC Write a function `count_happy_customers(scores)` that returns the number of happy customers.
+
+# COMMAND ----------
+
+def count_happy_customers(scores):
+    if len(scores) == 1 or len(scores) == 0:
+        return 0
+    else:
+        count = 0
+        avg = sum(scores)//len(scores)
+        print(avg)
+        for i in scores:
+            if i > avg:
+                count +=1
+        return count
+ # --- Test Cases ---
+assert count_happy_customers([3, 6, 1, 8, 2]) == 2, "Test 1 Failed"
+print(count_happy_customers([3, 6, 1, 8, 2]), 'Case 1')
+assert count_happy_customers([5, 5, 5, 5]) == 0, "Test 2 Failed"
+print(count_happy_customers([5, 5, 5, 5]), 'Case 2')
+assert count_happy_customers([10]) == 0, "Test 3 Failed"
+print(count_happy_customers([10]), 'Case 3')
+assert count_happy_customers([1, 2, 3, 4, 5]) == 2, "Test 4 Failed"
+print(count_happy_customers([1, 2, 3, 4, 5]), 'Case 4')
+assert count_happy_customers([100, 1]) == 1, "Test 5 Failed"   
+print(count_happy_customers([100, 1]), 'Case 5')
+print('Passed')
 
 # COMMAND ----------
 
