@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 
 
 # COMMAND ----------
@@ -74,27 +78,37 @@ def assign_seats(students):
     Returns list of (seat_number, student_name) sorted by seat number.
     """
     # TODO: Write your solution here
-    pass
+    li = []
+    start, end = 1, len(students)
+    for i in students:
+        if i[1] % 2 == 0:
+            li.append((start, i[0]))
+            start += 1
+        elif i[1] % 2 != 0:
+            li.append((end, i[0]))
+            end -=1
+    return sorted(li)
+
 
 
 # --- Test Cases ---
 # Uncomment after implementing your solution
-# result = assign_seats([("Alice", 101), ("Bob", 102), ("Charlie", 103), ("Diana", 104)])
-# assert result == [(1, "Bob"), (2, "Diana"), (3, "Charlie"), (4, "Alice")], f"Test 1 Failed: {result}"
+result = assign_seats([("Alice", 101), ("Bob", 102), ("Charlie", 103), ("Diana", 104)])
+assert result == [(1, "Bob"), (2, "Diana"), (3, "Charlie"), (4, "Alice")], f"Test 1 Failed: {result}"
 
-# result = assign_seats([("Zara", 10), ("Mike", 15)])
-# assert result == [(1, "Zara"), (2, "Mike")], f"Test 2 Failed: {result}"
+result = assign_seats([("Zara", 10), ("Mike", 15)])
+assert result == [(1, "Zara"), (2, "Mike")], f"Test 2 Failed: {result}"
 
-# result = assign_seats([("Solo", 99)])
-# assert result == [(1, "Solo")], f"Test 3 Failed: {result}"
+result = assign_seats([("Solo", 99)])
+assert result == [(1, "Solo")], f"Test 3 Failed: {result}"
 
-# result = assign_seats([("A", 2), ("B", 4), ("C", 6)])
-# assert result == [(1, "A"), (2, "B"), (3, "C")], f"Test 4 Failed: {result}"
+result = assign_seats([("A", 2), ("B", 4), ("C", 6)])
+assert result == [(1, "A"), (2, "B"), (3, "C")], f"Test 4 Failed: {result}"
 
-# result = assign_seats([("A", 1), ("B", 3), ("C", 5)])
-# assert result == [(1, "C"), (2, "B"), (3, "A")], f"Test 5 Failed: {result}"
+result = assign_seats([("A", 1), ("B", 3), ("C", 5)])
+assert result == [(1, "C"), (2, "B"), (3, "A")], f"Test 5 Failed: {result}"
 
-# result = assign_seats([("P", 2), ("Q", 1), ("R", 4), ("S", 3)])
-# assert result == [(1, "P"), (2, "R"), (3, "S"), (4, "Q")], f"Test 6 Failed: {result}"
+result = assign_seats([("P", 2), ("Q", 1), ("R", 4), ("S", 3)])
+assert result == [(1, "P"), (2, "R"), (3, "S"), (4, "Q")], f"Test 6 Failed: {result}"
 
-print("Implement the function and uncomment the test cases to check your solution!")
+print("All Test Cases Passed")

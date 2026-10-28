@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 
 
 # COMMAND ----------
@@ -84,19 +88,38 @@ def min_shelf_height(books, W):
     Returns:
         int: Minimum total height of all shelves.
     """
-    # TODO: Write your solution here
-    pass
+    # dp[i] = minimum total height for the first i books.
+    # For each i, try every possible group of trailing books that can share
+    # the last shelf (walk backwards while total thickness <= W).
+    n = len(books)
+    dp = [float("inf")] * (n + 1)
+    dp[0] = 0
+    for i in range(1, n + 1):
+        thickness = 0
+        shelf_height = 0
+        for j in range(i - 1, -1, -1):
+            thickness += books[j][0]
+            if thickness > W:
+                break
+            shelf_height = max(shelf_height, books[j][1])
+            dp[i] = min(dp[i], dp[j] + shelf_height)
+    return dp[n]
 
 
 # --- Test Cases ---
-# Uncomment after implementing your solution
-# assert min_shelf_height([[1, 3], [2, 4], [1, 2], [3, 1]], 4) == 6, "Test 1 Failed"
-# assert min_shelf_height([[1, 1], [1, 1], [1, 1]], 1) == 3, "Test 2 Failed"
-# assert min_shelf_height([[4, 5], [2, 3]], 4) == 8, "Test 3 Failed"
-# assert min_shelf_height([[2, 5]], 4) == 5, "Test 4 Failed"
-# assert min_shelf_height([[1, 1], [1, 2], [1, 3], [1, 4]], 4) == 4, "Test 5 Failed"
-# assert min_shelf_height([[3, 3], [3, 3], [3, 3]], 6) == 6, "Test 6 Failed"
-# assert min_shelf_height([[1, 10], [1, 1], [1, 1]], 3) == 10, "Test 7 Failed"
-# assert min_shelf_height([[2, 1], [2, 5], [2, 1], [2, 1]], 4) == 8, "Test 8 Failed"
+# Note: Tests 1 and 8 originally expected 6 and 8, but per the problem's own
+# rules a better (valid) arrangement exists, so the true minimum is lower:
+#   Test 1: [[1,3],[2,4],[1,2],[3,1]] -> books 0,1,2 fit on one shelf
+#           (thickness 1+2+1=4 <= 4, height max(3,4,2)=4) + book 3 alone (1) = 5
+#   Test 8: [[2,1],[2,5],[2,1],[2,1]] -> shelves [0,1] and [2,3]
+#           (thickness 4 <= 4 each) -> max(1,5) + max(1,1) = 6
+assert min_shelf_height([[1, 3], [2, 4], [1, 2], [3, 1]], 4) == 5, "Test 1 Failed"
+assert min_shelf_height([[1, 1], [1, 1], [1, 1]], 1) == 3, "Test 2 Failed"
+assert min_shelf_height([[4, 5], [2, 3]], 4) == 8, "Test 3 Failed"
+assert min_shelf_height([[2, 5]], 4) == 5, "Test 4 Failed"
+assert min_shelf_height([[1, 1], [1, 2], [1, 3], [1, 4]], 4) == 4, "Test 5 Failed"
+assert min_shelf_height([[3, 3], [3, 3], [3, 3]], 6) == 6, "Test 6 Failed"
+assert min_shelf_height([[1, 10], [1, 1], [1, 1]], 3) == 10, "Test 7 Failed"
+assert min_shelf_height([[2, 1], [2, 5], [2, 1], [2, 1]], 4) == 6, "Test 8 Failed"
 
-print("Implement the function and uncomment the test cases to check your solution!")
+print("All tests passed!")
