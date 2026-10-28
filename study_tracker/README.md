@@ -4,6 +4,12 @@ Study Tracker is a single-window desktop app for browsing the topics in
 `Study_Tracker.xlsx`, filtering by area or search text, and recording completed
 topics. Completion is written to each topic sheet's `Done` column using the
 same check mark as the workbook, leaving the summary formulas in place.
+Use **Add topic** to choose an existing area and enter the topic, subtopic,
+coverage, and notes. Select a topic and choose **Delete selected** to remove it
+after confirming. Both actions update the workbook and its summary formulas.
+For edits to save, close the workbook in Excel and let OneDrive finish syncing
+first. If Windows blocks a save, the app keeps the unsaved form contents and
+explains how to retry or choose a writable workbook copy.
 
 ## Run from Python
 

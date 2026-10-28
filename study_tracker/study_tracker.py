@@ -4,15 +4,19 @@ import os
 import sys
 import tempfile
 import tkinter as tk
+from copy import copy
 from dataclasses import dataclass, replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from openpyxl import load_workbook
+from openpyxl.workbook.workbook import Workbook
+from openpyxl.worksheet.worksheet import Worksheet
 
 
 DONE_MARK = "✔"
 TOPIC_HEADERS = ("Done", "#", "Topic", "Subtopic", "What to cover", "Notes")
+SUMMARY_HEADERS = ("Area", "Total", "Completed", "Remaining", "Progress")
 
 
 @dataclass(frozen=True)
@@ -36,12 +40,38 @@ def get_icon_path() -> Path:
     return bundle_directory / "study_tracker.ico"
 
 
+def load_topic_areas(workbook_path: Path) -> list[str]:
+    if not workbook_path.is_file():
+        raise FileNotFoundError(f"Workbook not found: {workbook_path}")
+
+    workbook = load_workbook(workbook_path, data_only=False, read_only=True)
+    try:
+        areas = []
+        for worksheet in workbook.worksheets:
+            headers = tuple(
+                worksheet.cell(row=1, column=column).value
+                for column in range(1, len(TOPIC_HEADERS) + 1)
+            )
+            if headers == TOPIC_HEADERS:
+                areas.append(worksheet.title)
+    finally:
+        workbook.close()
+
+    if not areas:
+        raise ValueError(
+            "No topic sheets were found. Each topic sheet must have the "
+            "columns Done, #, Topic, Subtopic, What to cover, and Notes."
+        )
+    return areas
+
+
 def load_topics(workbook_path: Path) -> list[Topic]:
     if not workbook_path.is_file():
         raise FileNotFoundError(f"Workbook not found: {workbook_path}")
 
     workbook = load_workbook(workbook_path, data_only=False)
     topics: list[Topic] = []
+    found_topic_sheet = False
     try:
         for worksheet in workbook.worksheets:
             headers = tuple(
@@ -50,6 +80,7 @@ def load_topics(workbook_path: Path) -> list[Topic]:
             )
             if headers != TOPIC_HEADERS:
                 continue
+            found_topic_sheet = True
 
             for row_number in range(2, worksheet.max_row + 1):
                 values = tuple(
@@ -79,7 +110,7 @@ def load_topics(workbook_path: Path) -> list[Topic]:
     finally:
         workbook.close()
 
-    if not topics:
+    if not found_topic_sheet:
         raise ValueError(
             "No topic sheets were found. Each topic sheet must have the "
             "columns Done, #, Topic, Subtopic, What to cover, and Notes."
@@ -87,17 +118,73 @@ def load_topics(workbook_path: Path) -> list[Topic]:
     return topics
 
 
-def save_topic_completion(
-    workbook_path: Path,
-    topic: Topic,
-    completed: bool,
-) -> None:
-    workbook = load_workbook(workbook_path, data_only=False)
+def _refresh_summary_formulas(workbook: Workbook) -> None:
+    if "Summary" not in workbook.sheetnames:
+        return
+
+    summary = workbook["Summary"]
+    header_row = next(
+        (
+            row
+            for row in range(1, summary.max_row + 1)
+            if tuple(summary.cell(row=row, column=column).value for column in range(1, 6))
+            == SUMMARY_HEADERS
+        ),
+        None,
+    )
+    if header_row is None:
+        return
+
+    area_rows: list[int] = []
+    overall_row: int | None = None
+    for row in range(header_row + 1, summary.max_row + 1):
+        area = summary.cell(row=row, column=1).value
+        if not isinstance(area, str):
+            continue
+        if area.strip().casefold() == "overall":
+            overall_row = row
+        elif area in workbook.sheetnames:
+            worksheet = workbook[area]
+            headers = tuple(
+                worksheet.cell(row=1, column=column).value
+                for column in range(1, len(TOPIC_HEADERS) + 1)
+            )
+            if headers == TOPIC_HEADERS:
+                area_rows.append(row)
+                last_topic_row = max(2, _last_topic_row(worksheet))
+                quoted_area = area.replace("'", "''")
+                summary.cell(row=row, column=2).value = (
+                    f"=COUNTA('{quoted_area}'!C2:C{last_topic_row})"
+                )
+                summary.cell(row=row, column=3).value = (
+                    f'=COUNTIF(\'{quoted_area}\'!A2:A{last_topic_row},"{DONE_MARK}")'
+                )
+                summary.cell(row=row, column=4).value = f"=B{row}-C{row}"
+                summary.cell(row=row, column=5).value = f"=IF(B{row}=0,0,C{row}/B{row})"
+
+    if overall_row is not None and area_rows:
+        for column in range(2, 5):
+            column_name = chr(ord("A") + column - 1)
+            references = ",".join(f"{column_name}{row}" for row in area_rows)
+            summary.cell(row=overall_row, column=column).value = f"=SUM({references})"
+        summary.cell(row=overall_row, column=5).value = (
+            f"=IF(B{overall_row}=0,0,C{overall_row}/B{overall_row})"
+        )
+
+
+def _last_topic_row(worksheet: Worksheet) -> int:
+    for row in range(worksheet.max_row, 1, -1):
+        if any(
+            worksheet.cell(row=row, column=column).value is not None
+            for column in range(1, len(TOPIC_HEADERS) + 1)
+        ):
+            return row
+    return 1
+
+
+def _save_workbook_atomically(workbook: Workbook, workbook_path: Path) -> None:
     temporary_path: Path | None = None
     try:
-        worksheet = workbook[topic.area]
-        worksheet.cell(row=topic.row, column=1).value = DONE_MARK if completed else None
-
         with tempfile.NamedTemporaryFile(
             prefix=f".{workbook_path.stem}_",
             suffix=workbook_path.suffix,
@@ -114,11 +201,106 @@ def save_topic_completion(
             temporary_path.unlink()
 
 
+def get_workbook_error_message(action: str, error: OSError | ValueError | KeyError) -> str:
+    if isinstance(error, PermissionError):
+        return (
+            f"Windows could not {action} because it denied access to the workbook:\n"
+            f"{error.filename or error}\n\n"
+            "Your changes are still in the app. Close this message, close the "
+            "workbook in Excel, wait for OneDrive to finish syncing, then try "
+            f"{action} again. If the file is read-only, use Choose workbook... "
+            "to open a writable copy."
+        )
+    return f"The workbook was not updated:\n{error}"
+
+
+def save_topic_completion(
+    workbook_path: Path,
+    topic: Topic,
+    completed: bool,
+) -> None:
+    workbook = load_workbook(workbook_path, data_only=False)
+    worksheet = workbook[topic.area]
+    worksheet.cell(row=topic.row, column=1).value = DONE_MARK if completed else None
+    _save_workbook_atomically(workbook, workbook_path)
+
+
+def add_topic(
+    workbook_path: Path,
+    area: str,
+    title: str,
+    subtopic: str,
+    coverage: str,
+    notes: str,
+) -> None:
+    normalized_title = title.strip()
+    if not normalized_title:
+        raise ValueError("Topic is required.")
+
+    workbook = load_workbook(workbook_path, data_only=False)
+    if area not in workbook.sheetnames:
+        workbook.close()
+        raise ValueError(f"Topic area not found in workbook: {area}")
+
+    worksheet = workbook[area]
+    headers = tuple(
+        worksheet.cell(row=1, column=column).value
+        for column in range(1, len(TOPIC_HEADERS) + 1)
+    )
+    if headers != TOPIC_HEADERS:
+        workbook.close()
+        raise ValueError(f"The {area} sheet is not a supported topic sheet.")
+
+    row = _last_topic_row(worksheet) + 1
+    previous_row = row - 1
+    if previous_row > 1:
+        for column in range(1, len(TOPIC_HEADERS) + 1):
+            source = worksheet.cell(row=previous_row, column=column)
+            destination = worksheet.cell(row=row, column=column)
+            if source.has_style:
+                destination._style = copy(source._style)
+    worksheet.cell(row=row, column=1).value = None
+    worksheet.cell(row=row, column=2).value = row - 1
+    worksheet.cell(row=row, column=3).value = normalized_title
+    worksheet.cell(row=row, column=4).value = subtopic.strip() or "—"
+    worksheet.cell(row=row, column=5).value = coverage.strip()
+    worksheet.cell(row=row, column=6).value = notes.strip()
+    _refresh_summary_formulas(workbook)
+    _save_workbook_atomically(workbook, workbook_path)
+
+
+def delete_topic(workbook_path: Path, topic: Topic) -> None:
+    workbook = load_workbook(workbook_path, data_only=False)
+    worksheet = workbook[topic.area]
+    headers = tuple(
+        worksheet.cell(row=1, column=column).value
+        for column in range(1, len(TOPIC_HEADERS) + 1)
+    )
+    if headers != TOPIC_HEADERS:
+        workbook.close()
+        raise ValueError(f"The {topic.area} sheet is not a supported topic sheet.")
+
+    if worksheet.cell(row=topic.row, column=3).value != topic.title:
+        workbook.close()
+        raise ValueError("The selected topic changed in the workbook. Reload it and try again.")
+
+    worksheet.delete_rows(topic.row, 1)
+    for row in range(2, _last_topic_row(worksheet) + 1):
+        if any(
+            worksheet.cell(row=row, column=column).value is not None
+            for column in range(1, len(TOPIC_HEADERS) + 1)
+        ):
+            worksheet.cell(row=row, column=2).value = row - 1
+    _refresh_summary_formulas(workbook)
+    _save_workbook_atomically(workbook, workbook_path)
+
+
 class StudyTrackerApp:
     def __init__(self, root: tk.Tk, workbook_path: Path, topics: list[Topic]) -> None:
         self.root = root
         self.workbook_path = workbook_path
         self.topics = topics
+        self.areas = load_topic_areas(workbook_path)
         self.topic_by_key = {(topic.area, topic.row): topic for topic in topics}
         self.search_value = tk.StringVar()
         self.area_value = tk.StringVar(value="All areas")
@@ -171,7 +353,7 @@ class StudyTrackerApp:
         filters.grid(row=2, column=0, sticky="ew", pady=(0, 12))
         filters.columnconfigure(3, weight=1)
         ttk.Label(filters, text="Area").grid(row=0, column=0, padx=(0, 8))
-        areas = ["All areas", *dict.fromkeys(topic.area for topic in self.topics)]
+        areas = ["All areas", *self.areas]
         self.area_combo = ttk.Combobox(
             filters,
             textvariable=self.area_value,
@@ -259,6 +441,21 @@ class StudyTrackerApp:
             state="disabled",
         )
         self.toggle_button.grid(row=6, column=0, sticky="ew")
+        topic_actions = ttk.Frame(detail_frame)
+        topic_actions.grid(row=7, column=0, sticky="ew", pady=(10, 0))
+        topic_actions.columnconfigure((0, 1), weight=1)
+        ttk.Button(
+            topic_actions,
+            text="Add topic",
+            command=self.open_add_topic_dialog,
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        self.delete_button = ttk.Button(
+            topic_actions,
+            text="Delete selected",
+            command=self.delete_selected_topic,
+            state="disabled",
+        )
+        self.delete_button.grid(row=0, column=1, sticky="ew", padx=(5, 0))
 
         footer = ttk.Frame(container)
         footer.grid(row=4, column=0, sticky="ew", pady=(10, 0))
@@ -296,8 +493,7 @@ class StudyTrackerApp:
         for child in self.progress_frame.winfo_children():
             child.destroy()
 
-        areas = list(dict.fromkeys(topic.area for topic in self.topics))
-        for column, area in enumerate(["Overall", *areas]):
+        for column, area in enumerate(["Overall", *self.areas]):
             area_topics = self.topics if area == "Overall" else [
                 topic for topic in self.topics if topic.area == area
             ]
@@ -363,6 +559,7 @@ class StudyTrackerApp:
         self._set_text(self.coverage_text, "")
         self._set_text(self.notes_text, "")
         self.toggle_button.configure(text="Mark as done", state="disabled")
+        self.delete_button.configure(state="disabled")
 
     def show_selected_topic(self, _event: tk.Event[tk.Misc] | None = None) -> None:
         selection = self.topic_tree.selection()
@@ -384,6 +581,7 @@ class StudyTrackerApp:
             text="Mark as to do" if topic.done else "Mark as done",
             state="normal",
         )
+        self.delete_button.configure(state="normal")
 
     def toggle_selected(self, _event: tk.Event[tk.Misc] | None = None) -> None:
         selection = self.topic_tree.selection()
@@ -399,7 +597,7 @@ class StudyTrackerApp:
         except (OSError, KeyError, ValueError) as error:
             messagebox.showerror(
                 "Could not save progress",
-                f"The workbook was not updated:\n{error}",
+                get_workbook_error_message("save progress", error),
                 parent=self.root,
             )
             return
@@ -415,6 +613,125 @@ class StudyTrackerApp:
         self.topic_tree.selection_set(selection[0])
         self.topic_tree.focus(selection[0])
         self.show_selected_topic()
+
+    def open_add_topic_dialog(self) -> None:
+        areas = self.areas
+        if not areas:
+            messagebox.showerror(
+                "Cannot add topic",
+                "No topic areas are available in this workbook.",
+                parent=self.root,
+            )
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Add topic")
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+        dialog.grab_set()
+        form = ttk.Frame(dialog, padding=18)
+        form.pack(fill="both", expand=True)
+        form.columnconfigure(1, weight=1)
+
+        initial_area = (
+            self.area_value.get()
+            if self.area_value.get() in areas
+            else areas[0]
+        )
+        area_value = tk.StringVar(value=initial_area)
+        topic_value = tk.StringVar()
+        subtopic_value = tk.StringVar()
+        ttk.Label(form, text="Area").grid(row=0, column=0, sticky="w", padx=(0, 12), pady=5)
+        ttk.Combobox(
+            form,
+            textvariable=area_value,
+            values=areas,
+            state="readonly",
+            width=34,
+        ).grid(row=0, column=1, sticky="ew", pady=5)
+        ttk.Label(form, text="Topic").grid(row=1, column=0, sticky="w", padx=(0, 12), pady=5)
+        topic_entry = ttk.Entry(form, textvariable=topic_value, width=38)
+        topic_entry.grid(row=1, column=1, sticky="ew", pady=5)
+        ttk.Label(form, text="Subtopic").grid(row=2, column=0, sticky="w", padx=(0, 12), pady=5)
+        ttk.Entry(form, textvariable=subtopic_value, width=38).grid(
+            row=2, column=1, sticky="ew", pady=5
+        )
+        ttk.Label(form, text="What to cover").grid(
+            row=3, column=0, sticky="nw", padx=(0, 12), pady=5
+        )
+        coverage_text = tk.Text(form, width=38, height=5, wrap="word")
+        coverage_text.grid(row=3, column=1, sticky="ew", pady=5)
+        ttk.Label(form, text="Notes").grid(
+            row=4, column=0, sticky="nw", padx=(0, 12), pady=5
+        )
+        notes_text = tk.Text(form, width=38, height=4, wrap="word")
+        notes_text.grid(row=4, column=1, sticky="ew", pady=5)
+        buttons = ttk.Frame(form)
+        buttons.grid(row=5, column=0, columnspan=2, sticky="e", pady=(12, 0))
+
+        def save_new_topic() -> None:
+            try:
+                add_topic(
+                    self.workbook_path,
+                    area_value.get(),
+                    topic_value.get(),
+                    subtopic_value.get(),
+                    coverage_text.get("1.0", "end-1c"),
+                    notes_text.get("1.0", "end-1c"),
+                )
+                self.reload_topics()
+            except (OSError, KeyError, ValueError) as error:
+                messagebox.showerror(
+                    "Could not add topic",
+                    get_workbook_error_message("add the topic", error),
+                    parent=dialog,
+                )
+                return
+            self.status_value.set("Topic added to the workbook.")
+            dialog.destroy()
+
+        ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(
+            side="right", padx=(8, 0)
+        )
+        ttk.Button(buttons, text="Add topic", command=save_new_topic).pack(side="right")
+        topic_entry.focus_set()
+        dialog.bind("<Return>", lambda _event: save_new_topic())
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+
+    def delete_selected_topic(self) -> None:
+        selection = self.topic_tree.selection()
+        if not selection:
+            return
+        area, row_text = selection[0].rsplit("|", 1)
+        topic = self.topic_by_key[(area, int(row_text))]
+        if not messagebox.askyesno(
+            "Delete topic",
+            f"Delete “{topic.title}” from {topic.area}?\n\nThis also removes it from the workbook.",
+            parent=self.root,
+        ):
+            return
+        try:
+            delete_topic(self.workbook_path, topic)
+            self.reload_topics()
+        except (OSError, KeyError, ValueError) as error:
+            messagebox.showerror(
+                "Could not delete topic",
+                get_workbook_error_message("delete the topic", error),
+                parent=self.root,
+            )
+            return
+        self.status_value.set("Topic deleted from the workbook.")
+
+    def reload_topics(self) -> None:
+        self.topics = load_topics(self.workbook_path)
+        self.areas = load_topic_areas(self.workbook_path)
+        self.topic_by_key = {(topic.area, topic.row): topic for topic in self.topics}
+        self.area_combo.configure(
+            values=["All areas", *self.areas]
+        )
+        if self.area_value.get() not in self.area_combo["values"]:
+            self.area_value.set("All areas")
+        self.refresh_topics()
 
     def choose_workbook(self) -> None:
         selected_path = filedialog.askopenfilename(
@@ -439,11 +756,12 @@ class StudyTrackerApp:
 
         self.workbook_path = workbook_path
         self.topics = topics
+        self.areas = load_topic_areas(workbook_path)
         self.topic_by_key = {(topic.area, topic.row): topic for topic in topics}
         self.workbook_label.set(str(workbook_path))
         self.area_value.set("All areas")
         self.area_combo.configure(
-            values=["All areas", *dict.fromkeys(topic.area for topic in topics)]
+            values=["All areas", *self.areas]
         )
         self.status_value.set("Workbook loaded.")
         self.refresh_topics()
